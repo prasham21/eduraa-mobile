@@ -166,7 +166,7 @@ export const mobileControls: MobileControl[] = [
     icon: 'school',
     section: 'operations',
     requiresClassTeacher: true,
-    nativeStatus: 'web-only',
+    nativeStatus: 'native',
     target: { kind: 'detail' },
   },
   {

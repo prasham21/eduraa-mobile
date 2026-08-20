@@ -4,7 +4,7 @@
 
 import React, { useEffect } from 'react'
 import { StatusBar } from 'expo-status-bar'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClientProvider } from '@tanstack/react-query'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { StyleSheet, View, ActivityIndicator, Platform } from 'react-native'
@@ -13,15 +13,7 @@ import { SpaceGrotesk_500Medium, SpaceGrotesk_600SemiBold, SpaceGrotesk_700Bold 
 import RootNavigator from './src/navigation'
 import { useAuthStore } from './src/stores/authStore'
 import { authApi } from './src/api/auth'
-
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      retry: 1,
-      staleTime: 1000 * 60 * 5, // 5 minutes
-    },
-  },
-})
+import { queryClient } from './src/api/queryClient'
 
 function AppContent() {
   const { setAuth, logout } = useAuthStore()

@@ -6,6 +6,7 @@ import { useQuery } from '@tanstack/react-query'
 import { AnimatedCard, AppScreen, GradientHeroCard, SelectableChip } from '../../components/ui'
 import { b2cApi } from '../../api/b2c'
 import { mobileControls, MobileControl, roleCanSeeControl } from '../../data/mobileControlCatalog'
+import { useClassTeacherAccess } from '../../hooks/useClassTeacherAccess'
 import { useAuthStore } from '../../stores/authStore'
 import { colors, radius, shadows, spacing, typography } from '../../theme'
 
@@ -81,6 +82,10 @@ export default function WorkspaceScreen() {
     enabled: user?.role === 'b2c_student',
   })
 
+  // Class-teacher capability is confirmed against the server rather than read
+  // off the JWT, so a stale token neither grants nor hides the workspace.
+  const classTeacherAccess = useClassTeacherAccess({ enabled: user?.role === 'teacher' })
+
   const controls = useMemo(() => {
     if (!user?.role) return []
     const competitive = isCompetitiveProfile(user, b2cQuery.data)
@@ -89,15 +94,12 @@ export default function WorkspaceScreen() {
     return mobileControls.filter((control) => {
       if (control.hiddenOnWeb) return false
       if (!roleCanSeeControl(user.role, control)) return false
-      if (control.requiresClassTeacher) {
-        const isClassTeacher = Boolean(user.class_teacher_opt_in && user.class_teacher_standard && user.class_teacher_division)
-        if (!isClassTeacher) return false
-      }
+      if (control.requiresClassTeacher && !classTeacherAccess.isAuthorized) return false
       if (control.requiresCompetitiveExam && !competitive) return false
       if (control.requiresJee && !jee) return false
       return true
     })
-  }, [b2cQuery.data, user])
+  }, [b2cQuery.data, classTeacherAccess.isAuthorized, user])
 
   const nativeCount = controls.filter((control) => control.nativeStatus === 'native').length
   const partialCount = controls.filter((control) => control.nativeStatus === 'partial').length
@@ -138,6 +140,11 @@ export default function WorkspaceScreen() {
         return
       }
       navigation.navigate('ScanUpload')
+      return
+    }
+
+    if (control.id === 'class-teacher') {
+      navigation.navigate('ClassTeacherOverview')
       return
     }
 
@@ -236,6 +243,12 @@ export default function WorkspaceScreen() {
           <View style={styles.inlineLoading}>
             <ActivityIndicator color={colors.accent} />
             <Text style={styles.inlineLoadingText}>Checking JEE/competitive filters</Text>
+          </View>
+        ) : null}
+        {user?.role === 'teacher' && classTeacherAccess.isLoading ? (
+          <View style={styles.inlineLoading}>
+            <ActivityIndicator color={colors.accent} />
+            <Text style={styles.inlineLoadingText}>Checking your class-teacher assignment</Text>
           </View>
         ) : null}
       </AnimatedCard>

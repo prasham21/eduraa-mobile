@@ -57,13 +57,6 @@ export const workspaceApi = {
         return Promise.all([read('Upload options', '/checked-papers/options'), read('Recent checked papers', '/checked-papers')])
       case 'teacher-students':
         return Promise.all([read('Students', '/roster/teacher/students'), read('Teacher profile map', '/roster/teacher/master-profile')])
-      case 'class-teacher':
-        return Promise.all([
-          read('My classes', '/class-teacher/classes/me'),
-          read('Roster', '/class-teacher/roster'),
-          read('Standard divisions', '/class-teacher/standard-divisions'),
-          read('Semesters', '/class-teacher/semesters'),
-        ])
       case 'teacher':
         return Promise.all([read('Teacher profile', '/roster/teacher/master-profile'), read('Cohort insights', '/agentic-learning/cohort-insights')])
       case 'principal-profile':

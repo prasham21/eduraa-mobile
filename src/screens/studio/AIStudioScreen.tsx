@@ -1,22 +1,28 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
 import {
-  View,
+  AccessibilityInfo,
+  ActivityIndicator,
+  Animated,
+  FlatList,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
   Text,
   TextInput,
-  FlatList,
-  StyleSheet,
   TouchableOpacity,
-  KeyboardAvoidingView,
-  Platform,
-  Animated,
+  View,
   useWindowDimensions,
-  Modal,
-  ScrollView,
-  ActivityIndicator,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { AIResponseRenderer, hasMarkdown } from '../../components/ai/AIResponseRenderer'
+import { useReducedMotion } from '../../hooks/useReducedMotion'
+import { AiAnswerSource, streamAiChat } from '../../api/aiStream'
+import { toApiFailure } from '../../api/errors'
 import { colors } from '../../theme/colors'
 import { spacing, radius, shadows } from '../../theme/spacing'
 import { fonts } from '../../theme/fonts'
@@ -31,6 +37,16 @@ interface LocalMessage {
   content: string
   timestamp: Date
   pending?: boolean
+  /** Assistant reply still arriving. */
+  streaming?: boolean
+  /** Ended before completing — either cancelled or interrupted. */
+  incomplete?: boolean
+  /** Whether the answer used the learner's Eduraa data or general knowledge. */
+  source?: AiAnswerSource | null
+  /** Server message id; used to keep a retry from duplicating a reply. */
+  serverMessageId?: string
+  /** The prompt that produced this reply, so it can be retried. */
+  promptForRetry?: string
 }
 
 const WELCOME_MESSAGE: LocalMessage = {
@@ -67,6 +83,7 @@ function msgTime(date: Date): string {
 // ─── Typing dots ──────────────────────────────────────────────────────────────
 
 function TypingDots() {
+  const reducedMotion = useReducedMotion()
   const anims = [
     useRef(new Animated.Value(0)).current,
     useRef(new Animated.Value(0)).current,
@@ -84,12 +101,16 @@ function TypingDots() {
         ]),
       ),
     )
+    if (reducedMotion) {
+      anims.forEach(a => a.setValue(0))
+      return
+    }
     loops.forEach(l => l.start())
     return () => loops.forEach(l => l.stop())
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [reducedMotion]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <View style={td.row}>
+    <View style={td.row} accessible accessibilityLabel="Eduraa AI is writing an answer">
       <View style={td.avatar}>
         <Ionicons name="sparkles" size={13} color={colors.white} />
       </View>
@@ -149,12 +170,31 @@ function AIBlocks({ blocks }: { blocks: AIBlock[] }) {
       {blocks.map((block, i) => {
         if (block.type === 'text') {
           const isPrimary = block.role === 'primary'
+          const isLabel = block.role === 'label'
+          const body = block.content ?? ''
+          if (isLabel) {
+            return (
+              <Text key={i} style={mb.blockLabel}>
+                {body}
+              </Text>
+            )
+          }
+          // Secondary blocks carry markdown bullets, tables and formulas.
+          if (hasMarkdown(body)) {
+            return (
+              <AIResponseRenderer
+                key={i}
+                content={body}
+                textStyle={isPrimary ? mb.blockPrimary : mb.blockSecondary}
+              />
+            )
+          }
           return (
             <Text
               key={i}
               style={[mb.aiText, isPrimary ? mb.blockPrimary : mb.blockSecondary]}
             >
-              {block.content}
+              {body}
             </Text>
           )
         }
@@ -191,24 +231,74 @@ function AIBlocks({ blocks }: { blocks: AIBlock[] }) {
   )
 }
 
+/**
+ * Where the answer came from. The backend reports `inside` when it used the
+ * learner's own Eduraa data and `outside` when it answered from general
+ * knowledge; saying so plainly is more honest than an unqualified answer.
+ */
+function GroundingNote({ source }: { source: AiAnswerSource }) {
+  const inside = source === 'inside'
+  return (
+    <View style={mb.groundingRow}>
+      <Ionicons
+        name={inside ? 'shield-checkmark-outline' : 'globe-outline'}
+        size={12}
+        color={inside ? colors.success : colors.textMuted}
+      />
+      <Text style={[mb.groundingText, inside && { color: colors.success }]}>
+        {inside ? 'Based on your Eduraa data' : 'General knowledge, not your school data'}
+      </Text>
+    </View>
+  )
+}
+
 // ─── Message bubble ───────────────────────────────────────────────────────────
 
-const MessageBubble = React.memo(function MessageBubble({ msg }: { msg: LocalMessage }) {
+const MessageBubble = React.memo(function MessageBubble({
+  msg,
+  onRetry,
+}: {
+  msg: LocalMessage
+  onRetry?: (msg: LocalMessage) => void
+}) {
   const isUser = msg.role === 'user'
+  const reducedMotion = useReducedMotion()
   const fadeAnim = useRef(new Animated.Value(0)).current
   const slideAnim = useRef(new Animated.Value(10)).current
 
   useEffect(() => {
+    if (reducedMotion) {
+      // Appear immediately rather than sliding in.
+      fadeAnim.setValue(1)
+      slideAnim.setValue(0)
+      return
+    }
     Animated.parallel([
       Animated.timing(fadeAnim, { toValue: 1, duration: 220, useNativeDriver: true }),
       Animated.timing(slideAnim, { toValue: 0, duration: 220, useNativeDriver: true }),
     ]).start()
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [reducedMotion]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const structured = !isUser ? parseAIContent(msg.content) : null
 
   return (
     <Animated.View
+      accessible
+      accessibilityRole="text"
+      accessibilityLabel={[
+        isUser ? 'You said' : 'Eduraa AI said',
+        msg.content,
+        msg.streaming ? 'Still writing' : null,
+        msg.incomplete ? 'Answer incomplete' : null,
+        msg.source === 'inside'
+          ? 'Based on your Eduraa data'
+          : msg.source === 'outside'
+            ? 'General knowledge, not your school data'
+            : null,
+        msgTime(msg.timestamp),
+      ]
+        .filter(Boolean)
+        .join('. ')}
       style={[
         mb.row,
         isUser ? mb.userRow : mb.aiRow,
@@ -223,9 +313,32 @@ const MessageBubble = React.memo(function MessageBubble({ msg }: { msg: LocalMes
       <View style={[mb.bubble, isUser ? mb.userBubble : mb.aiBubble, !isUser && shadows.xs]}>
         {structured ? (
           <AIBlocks blocks={structured.blocks} />
+        ) : !isUser && hasMarkdown(msg.content) ? (
+          <>
+            <AIResponseRenderer content={msg.content} />
+            {msg.streaming ? <Text style={mb.caret}>▍</Text> : null}
+          </>
         ) : (
-          <Text style={[mb.text, isUser ? mb.userText : mb.aiText]}>{msg.content}</Text>
+          <Text style={[mb.text, isUser ? mb.userText : mb.aiText]}>
+            {msg.content}
+            {msg.streaming ? <Text style={mb.caret}>▍</Text> : null}
+          </Text>
         )}
+
+        {!isUser && msg.source && !msg.incomplete ? <GroundingNote source={msg.source} /> : null}
+
+        {!isUser && msg.incomplete && !msg.streaming && msg.promptForRetry && onRetry ? (
+          <Pressable
+            onPress={() => onRetry(msg)}
+            accessibilityRole="button"
+            accessibilityLabel="Retry this answer"
+            style={({ pressed }) => [mb.retryButton, pressed && { opacity: 0.75 }]}
+          >
+            <Ionicons name="refresh" size={13} color={colors.accentStrong} />
+            <Text style={mb.retryText}>Try again</Text>
+          </Pressable>
+        ) : null}
+
         <Text style={[mb.time, isUser ? mb.userTime : mb.aiTime]}>{msgTime(msg.timestamp)}</Text>
       </View>
     </Animated.View>
@@ -249,10 +362,24 @@ const mb = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
   },
   text: { fontSize: 14, lineHeight: 22, fontFamily: fonts.regular },
+  caret: { color: colors.accent, fontFamily: fonts.regular },
+  groundingRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 },
+  groundingText: { fontSize: 11, lineHeight: 15, fontFamily: fonts.medium, color: colors.muted, flexShrink: 1 },
+  retryButton: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    alignSelf: 'flex-start', minHeight: 36, marginTop: 4,
+    paddingHorizontal: spacing[3], borderRadius: radius.full,
+    borderWidth: 1, borderColor: colors.borderBrand, backgroundColor: colors.accentSurface,
+  },
+  retryText: { fontSize: 12, fontFamily: fonts.bold, color: colors.accentStrong },
   userText: { color: colors.white },
   aiText: { color: colors.ink, fontSize: 14, lineHeight: 22, fontFamily: fonts.regular },
   blockPrimary: { fontSize: 14, lineHeight: 22, fontWeight: '500', fontFamily: fonts.medium },
   blockSecondary: { fontSize: 13, lineHeight: 20, fontFamily: fonts.regular, color: colors.muted },
+  blockLabel: {
+    fontSize: 10, lineHeight: 14, fontFamily: fonts.bold, color: colors.textMuted,
+    textTransform: 'uppercase', letterSpacing: 0.8,
+  },
   callout: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -381,7 +508,12 @@ function HistoryPanel({
             </View>
             <Text style={hp.title}>Eduraa AI</Text>
           </View>
-          <TouchableOpacity style={hp.closeBtn} onPress={onClose}>
+          <TouchableOpacity
+          style={hp.closeBtn}
+          onPress={onClose}
+          accessibilityRole="button"
+          accessibilityLabel="Close conversation history"
+        >
             <Ionicons name="close" size={18} color={colors.muted} />
           </TouchableOpacity>
         </View>
@@ -538,57 +670,150 @@ export default function AIStudioScreen() {
     setTimeout(() => listRef.current?.scrollToEnd({ animated }), 80)
   }, [])
 
-  // ── Send a message ──────────────────────────────────────────────────────────
-  const sendMessage = useCallback(async (text?: string) => {
-    const content = (text ?? input).trim()
-    if (!content || loading) return
+  // ── Send a message (streamed) ───────────────────────────────────────────────
+  const abortRef = useRef<AbortController | null>(null)
+  const inFlightRef = useRef(false)
+  const [thinking, setThinking] = useState(false)
 
-    const userMsg: LocalMessage = {
-      id: `u_${Date.now()}`,
-      role: 'user',
-      content,
-      timestamp: new Date(),
-    }
-    setMessages(prev => [...prev, userMsg])
-    setInput('')
-    setLoading(true)
-    scrollToEnd()
+  const runStream = useCallback(
+    async (content: string, retryOf?: string) => {
+      // Guard against a duplicate tap landing a second request.
+      if (inFlightRef.current) return
+      inFlightRef.current = true
 
-    try {
-      const res = await aiApi.chat({
-        message: content,
-        conversation_id: conversationId,
-      })
+      const controller = new AbortController()
+      abortRef.current = controller
 
-      if (res.conversation_id) {
-        setConversationId(res.conversation_id)
-        // Invalidate conversation list so it reflects the new/updated conversation
-        queryClient.invalidateQueries({ queryKey: ['ai-conversations'] })
-      }
-
+      const assistantId = `a_${Date.now()}`
       setMessages(prev => [
         ...prev,
         {
-          id: `a_${Date.now()}`,
+          id: assistantId,
           role: 'assistant',
-          content: res.response || 'Sorry, I could not process that.',
+          content: '',
           timestamp: new Date(),
+          streaming: true,
+          promptForRetry: content,
         },
       ])
-    } catch (err: any) {
-      const msg = err?.response?.data?.detail || 'Something went wrong. Please try again.'
+      setLoading(true)
+      setThinking(true)
+      scrollToEnd()
+
+      const appendToken = (chunk: string) => {
+        setThinking(false)
+        setMessages(prev =>
+          prev.map(m => (m.id === assistantId ? { ...m, content: m.content + chunk } : m)),
+        )
+      }
+
+      const outcome = await streamAiChat(
+        { message: content, conversation_id: conversationId },
+        {
+          onMeta: convId => {
+            if (convId) setConversationId(convId)
+          },
+          onThinking: () => setThinking(true),
+          onToken: appendToken,
+        },
+        controller.signal,
+      )
+
+      setThinking(false)
+      setLoading(false)
+      inFlightRef.current = false
+      abortRef.current = null
+
+      setMessages(prev =>
+        prev.map(m => {
+          if (m.id !== assistantId) return m
+          if (outcome.status === 'completed') {
+            return {
+              ...m,
+              streaming: false,
+              source: outcome.done.source ?? null,
+              serverMessageId: outcome.done.message_id,
+              // An empty completed reply is still a failure to answer.
+              content: m.content || 'No answer came back. Send again to retry.',
+              incomplete: !m.content,
+            }
+          }
+          if (outcome.status === 'cancelled') {
+            // Keep whatever arrived; the learner asked us to stop.
+            return { ...m, streaming: false, incomplete: true, content: m.content || 'Stopped before any answer arrived.' }
+          }
+          if (outcome.status === 'stream_error') {
+            return { ...m, streaming: false, incomplete: true, content: m.content ? `${m.content}\n\n${outcome.message}` : outcome.message }
+          }
+          const failure = toApiFailure(outcome.failure)
+          return {
+            ...m,
+            streaming: false,
+            incomplete: true,
+            content: m.content ? `${m.content}\n\n${failure.message}` : failure.message,
+          }
+        }),
+      )
+
+      if (outcome.status === 'completed' && outcome.done.conversation_id) {
+        setConversationId(outcome.done.conversation_id)
+        queryClient.invalidateQueries({ queryKey: ['ai-conversations'] })
+      }
+
+      // Streaming text is invisible to a screen reader, so state the outcome.
+      AccessibilityInfo.announceForAccessibility(
+        outcome.status === 'completed'
+          ? 'Answer complete'
+          : outcome.status === 'cancelled'
+            ? 'Answer stopped'
+            : 'Answer failed. A retry button is available.',
+      )
+      scrollToEnd()
+      return retryOf
+    },
+    [conversationId, queryClient, scrollToEnd],
+  )
+
+  const sendMessage = useCallback(
+    async (text?: string) => {
+      const content = (text ?? input).trim()
+      if (!content || inFlightRef.current) return
+
       setMessages(prev => [
         ...prev,
-        { id: `err_${Date.now()}`, role: 'assistant', content: msg, timestamp: new Date() },
+        { id: `u_${Date.now()}`, role: 'user', content, timestamp: new Date() },
       ])
-    } finally {
-      setLoading(false)
+      setInput('')
       scrollToEnd()
-    }
-  }, [input, loading, conversationId, queryClient, scrollToEnd])
+      await runStream(content)
+    },
+    [input, runStream, scrollToEnd],
+  )
+
+  /** Stop an in-flight reply, keeping the partial text. */
+  const cancelStream = useCallback(() => {
+    abortRef.current?.abort()
+  }, [])
+
+  /**
+   * Retry a failed reply. The failed bubble is replaced rather than appended to,
+   * so a retry cannot leave two answers to one question.
+   */
+  const retryMessage = useCallback(
+    async (failed: LocalMessage) => {
+      if (!failed.promptForRetry || inFlightRef.current) return
+      setMessages(prev => prev.filter(m => m.id !== failed.id))
+      await runStream(failed.promptForRetry)
+    },
+    [runStream],
+  )
+
+  // Abort a stream still running when the screen goes away.
+  useEffect(() => () => abortRef.current?.abort(), [])
 
   // ── New chat ────────────────────────────────────────────────────────────────
   const startNewChat = useCallback(() => {
+    abortRef.current?.abort()
     setMessages([WELCOME_MESSAGE])
     setConversationId(undefined)
     setActiveConvTitle(null)
@@ -624,7 +849,13 @@ export default function AIStudioScreen() {
     <View style={styles.root}>
       {/* Top bar */}
       <View style={[styles.topBar, { paddingTop: insets.top + spacing[2] }]}>
-        <TouchableOpacity style={styles.topBtn} onPress={() => setShowHistory(true)} activeOpacity={0.75}>
+        <TouchableOpacity
+          style={styles.topBtn}
+          onPress={() => setShowHistory(true)}
+          activeOpacity={0.75}
+          accessibilityRole="button"
+          accessibilityLabel="Open conversation history"
+        >
           <Ionicons name="menu" size={20} color={colors.ink} />
         </TouchableOpacity>
 
@@ -666,7 +897,7 @@ export default function AIStudioScreen() {
             ref={listRef}
             data={messages}
             keyExtractor={item => item.id}
-            renderItem={({ item }) => <MessageBubble msg={item} />}
+            renderItem={({ item }) => <MessageBubble msg={item} onRetry={retryMessage} />}
             contentContainerStyle={styles.messageList}
             ItemSeparatorComponent={() => <View style={{ height: spacing[3] }} />}
             onContentSizeChange={() => scrollToEnd(false)}
@@ -676,8 +907,17 @@ export default function AIStudioScreen() {
             maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
             ListFooterComponent={
               loading ? (
-                <View style={{ marginTop: spacing[3] }}>
-                  <TypingDots />
+                <View style={styles.streamFooter}>
+                  {thinking ? <TypingDots /> : <View />}
+                  <Pressable
+                    onPress={cancelStream}
+                    accessibilityRole="button"
+                    accessibilityLabel="Stop generating"
+                    style={({ pressed }) => [styles.stopButton, pressed && { opacity: 0.75 }]}
+                  >
+                    <Ionicons name="stop" size={13} color={colors.accentStrong} />
+                    <Text style={styles.stopText}>Stop</Text>
+                  </Pressable>
                 </View>
               ) : null
             }
@@ -728,6 +968,9 @@ export default function AIStudioScreen() {
               onPress={() => sendMessage()}
               disabled={!canSend}
               activeOpacity={0.82}
+              accessibilityRole="button"
+              accessibilityLabel={loading ? 'Waiting for the current answer' : 'Send message'}
+              accessibilityState={{ disabled: !canSend, busy: loading }}
             >
               <Ionicons
                 name="arrow-up"
@@ -756,6 +999,25 @@ export default function AIStudioScreen() {
 }
 
 const styles = StyleSheet.create({
+  streamFooter: {
+    marginTop: spacing[3],
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing[3],
+  },
+  stopButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    minHeight: 36,
+    paddingHorizontal: spacing[3],
+    borderRadius: radius.full,
+    borderWidth: 1,
+    borderColor: colors.borderBrand,
+    backgroundColor: colors.accentSurface,
+  },
+  stopText: { fontSize: 12, fontFamily: fonts.bold, color: colors.accentStrong },
   root: { flex: 1, backgroundColor: colors.surface1 },
   kav: { flex: 1 },
 

@@ -6,6 +6,7 @@
 import { create } from 'zustand'
 import * as SecureStore from 'expo-secure-store'
 import { TOKEN_KEY, registerLogoutCallback, registerRefreshTokenCallback, setAccessToken } from '../api/client'
+import { resetQueryCache } from '../api/queryClient'
 import type { AccountMinimal, AuthToken } from '../types'
 
 interface AuthState {
@@ -44,6 +45,7 @@ export const useAuthStore = create<AuthState>((set, get) => {
       }
 
       setAccessToken(authToken.access_token)
+      resetQueryCache()
       set({
         user: authToken.user,
         token: authToken.access_token,
@@ -60,6 +62,7 @@ export const useAuthStore = create<AuthState>((set, get) => {
       }
 
       setAccessToken(null)
+      resetQueryCache()
       set({
         user: null,
         token: null,

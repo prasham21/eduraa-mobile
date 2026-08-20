@@ -29,6 +29,7 @@ import CompetitiveExamScreen from '../screens/learning/CompetitiveExamScreen'
 import CompetitiveSubjectScreen from '../screens/learning/CompetitiveSubjectScreen'
 import CompetitiveChapterScreen from '../screens/learning/CompetitiveChapterScreen'
 import AgenticLearningScreen from '../screens/learning/AgenticLearningScreen'
+import AgenticSubjectScreen from '../screens/learning/AgenticSubjectScreen'
 import AgenticTopicScreen from '../screens/learning/AgenticTopicScreen'
 import PreviousPapersScreen from '../screens/learning/PreviousPapersScreen'
 import WorkspaceScreen from '../screens/workspace/WorkspaceScreen'
@@ -37,6 +38,11 @@ import ApprovalsScreen from '../screens/workspace/ApprovalsScreen'
 import AttendanceScreen from '../screens/workspace/AttendanceScreen'
 import ScanUploadScreen from '../screens/workspace/ScanUploadScreen'
 import ExamsScreen from '../screens/workspace/ExamsScreen'
+import ClassTeacherOverviewScreen from '../screens/classTeacher/ClassTeacherOverviewScreen'
+import ClassRosterScreen from '../screens/classTeacher/ClassRosterScreen'
+import ClassSubjectsScreen from '../screens/classTeacher/ClassSubjectsScreen'
+import SubjectEnrollmentScreen from '../screens/classTeacher/SubjectEnrollmentScreen'
+import ClassValidationScreen from '../screens/classTeacher/ClassValidationScreen'
 import AIStudioScreen from '../screens/studio/AIStudioScreen'
 import ProfileScreen from '../screens/profile/ProfileScreen'
 
@@ -67,6 +73,7 @@ export type LearningStackParamList = {
   CompetitiveSubject: { subjectName: string }
   CompetitiveChapter: { subjectName: string; chapterKey: string }
   AgenticLearning: undefined
+  AgenticSubject: { subjectId: string; subjectName: string }
   AgenticTopic: { topicId: string }
   PreviousPapers: undefined
   Feature: { featureId: string }
@@ -89,6 +96,11 @@ export type StaffWorkspaceStackParamList = {
   StaffPapers: undefined
   StaffResults: undefined
   ResultDetail: { submissionId?: string; checkedPaperId?: string }
+  ClassTeacherOverview: undefined
+  ClassRoster: undefined
+  ClassSubjects: undefined
+  SubjectEnrollment: { subjectId: string; subjectName: string }
+  ClassValidation: undefined
 }
 
 export type ProfileStackParamList = {
@@ -181,6 +193,7 @@ function LearningNavigator({ competitive = false }: { competitive?: boolean }) {
       <LearningStack.Screen name="CompetitiveSubject" component={CompetitiveSubjectScreen} options={{ title: 'Competitive subject' }} />
       <LearningStack.Screen name="CompetitiveChapter" component={CompetitiveChapterScreen} options={{ title: 'Chapter workspace' }} />
       <LearningStack.Screen name="AgenticLearning" component={AgenticLearningScreen} options={{ title: 'Agentic Learning' }} />
+      <LearningStack.Screen name="AgenticSubject" component={AgenticSubjectScreen} options={{ title: 'Concept buckets' }} />
       <LearningStack.Screen name="AgenticTopic" component={AgenticTopicScreen} options={{ title: 'Concept lesson' }} />
       <LearningStack.Screen name="PreviousPapers" component={PreviousPapersScreen} options={{ title: 'Previous papers' }} />
       <LearningStack.Screen name="Feature" component={FeatureScreen} options={{ title: 'Feature' }} />
@@ -237,6 +250,11 @@ function StaffWorkspaceNavigator() {
       <StaffWorkspaceStack.Screen name="StaffPapers" component={PapersScreen} options={{ title: 'Papers' }} />
       <StaffWorkspaceStack.Screen name="StaffResults" component={ResultsScreen} options={{ title: 'Checked papers' }} />
       <StaffWorkspaceStack.Screen name="ResultDetail" component={ResultDetailScreen} options={{ title: 'Result detail' }} />
+      <StaffWorkspaceStack.Screen name="ClassTeacherOverview" component={ClassTeacherOverviewScreen} options={{ title: 'My class' }} />
+      <StaffWorkspaceStack.Screen name="ClassRoster" component={ClassRosterScreen} options={{ title: 'Roster and divisions' }} />
+      <StaffWorkspaceStack.Screen name="ClassSubjects" component={ClassSubjectsScreen} options={{ title: 'Subjects and enrollment' }} />
+      <StaffWorkspaceStack.Screen name="SubjectEnrollment" component={SubjectEnrollmentScreen} options={{ title: 'Subject enrollment' }} />
+      <StaffWorkspaceStack.Screen name="ClassValidation" component={ClassValidationScreen} options={{ title: 'Validation report' }} />
     </StaffWorkspaceStack.Navigator>
   )
 }

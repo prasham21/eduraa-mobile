@@ -1,11 +1,15 @@
 import React, { useMemo } from 'react'
-import { ActivityIndicator, Alert, StyleSheet, Text, View } from 'react-native'
+import { ActivityIndicator, Alert, Image, Pressable, StyleSheet, Text, View } from 'react-native'
 import { LinearGradient } from 'expo-linear-gradient'
 import { Ionicons } from '@expo/vector-icons'
-import { useRoute } from '@react-navigation/native'
+import { useNavigation, useRoute } from '@react-navigation/native'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AnimatedButton, AnimatedCard, AppScreen, ErrorState } from '../../components/ui'
 import { agenticLearningApi, AgenticLearningTopicDetail } from '../../api/agenticLearning'
+import { toApiFailure } from '../../api/errors'
+import { buildAssetUrl } from '../../api/client'
+import { masteryTone as masteryToneColor, ratioToPercent } from './agenticStatus'
+import { useLearnerTrack } from '../../hooks/useLearnerTrack'
 import { colors, radius, shadows, spacing, typography } from '../../theme'
 
 type RouteParams = {
@@ -38,8 +42,12 @@ function splitConcept(text: string) {
     .filter(Boolean)
 }
 
-function compactMeta(topic: AgenticLearningTopicDetail) {
-  return [topic.subject_name, topic.chapter_title, topic.weightage_label].filter(Boolean).join(' / ')
+/**
+ * Paper weightage is competitive-exam framing, so it is only appended for a
+ * learner actually on that track.
+ */
+function compactMeta(topic: AgenticLearningTopicDetail, showExamMetrics: boolean) {
+  return [topic.subject_name, topic.chapter_title, showExamMetrics ? topic.weightage_label : null].filter(Boolean).join(' / ')
 }
 
 function StatTile({ label, value, icon, tone }: { label: string; value: string; icon: keyof typeof Ionicons.glyphMap; tone: string }) {
@@ -134,11 +142,15 @@ function PracticePrompt({ prompt, index }: { prompt: string; index: number }) {
 export default function AgenticTopicScreen() {
   const route = useRoute()
   const { topicId } = route.params as RouteParams
+  const navigation = useNavigation<any>()
   const queryClient = useQueryClient()
+  const { isJee } = useLearnerTrack()
+  const showExamMetrics = isJee
 
   const topicQuery = useQuery({
     queryKey: ['agentic-topic', topicId],
     queryFn: () => agenticLearningApi.getTopic(topicId),
+    retry: false,
   })
 
   const resolveMutation = useMutation({
@@ -152,8 +164,9 @@ export default function AgenticTopicScreen() {
       await queryClient.invalidateQueries({ queryKey: ['agentic-subjects'] })
       await queryClient.invalidateQueries({ queryKey: ['agentic-subtopics'] })
     },
-    onError: () => {
-      Alert.alert('Update failed', 'Unable to update this topic right now.')
+    onError: (error) => {
+      const failure = toApiFailure(error)
+      Alert.alert(failure.kind === 'offline' ? 'You are offline' : 'Update failed', failure.message)
     },
   })
 
@@ -170,12 +183,28 @@ export default function AgenticTopicScreen() {
   }
 
   if (topicQuery.isError || !topic) {
+    const failure = topicQuery.error ? toApiFailure(topicQuery.error) : null
+    const canRetry = !failure || (failure.kind !== 'session_expired' && failure.kind !== 'not_authorized')
     return (
       <AppScreen scroll={false} contentStyle={styles.center}>
         <ErrorState
-          title="Lesson unavailable"
-          message="This Agentic Learning topic could not be loaded."
-          onAction={() => void topicQuery.refetch()}
+          title={
+            failure?.kind === 'offline'
+              ? 'You are offline'
+              : failure?.kind === 'session_expired'
+                ? 'Session expired'
+                : failure?.kind === 'not_authorized'
+                  ? 'Not your lesson'
+                  : 'Lesson unavailable'
+          }
+          message={
+            failure?.kind === 'offline'
+              ? 'This lesson needs a connection. Reconnect and try again.'
+              : failure?.kind === 'not_authorized'
+                ? 'This concept lesson belongs to another account.'
+                : failure?.detail ?? failure?.message ?? 'This concept lesson could not be loaded.'
+          }
+          onAction={canRetry ? () => void topicQuery.refetch() : undefined}
         />
       </AppScreen>
     )
@@ -183,7 +212,9 @@ export default function AgenticTopicScreen() {
 
   const isResolved = topic.status === 'resolved'
   const mastery = clampPercent(topic.mastery_score)
-  const confidence = clampPercent(topic.confidence)
+  // confidence / evidence_strength arrive as 0-1 ratios, unlike mastery_score.
+  const confidence = ratioToPercent(topic.confidence)
+  const evidence = ratioToPercent(topic.evidence_strength)
   const tone = masteryTone(mastery)
   const conceptLead = conceptPieces.slice(0, 2).join(' ')
   const conceptSupport = conceptPieces.slice(2, 6)
@@ -204,7 +235,7 @@ export default function AgenticTopicScreen() {
         </View>
 
         <Text style={styles.heroTitle}>{topic.topic_name}</Text>
-        <Text style={styles.heroMeta}>{compactMeta(topic)}</Text>
+        <Text style={styles.heroMeta}>{compactMeta(topic, showExamMetrics)}</Text>
 
         <View style={styles.heroMission}>
           <View style={styles.missionCopy}>
@@ -224,6 +255,7 @@ export default function AgenticTopicScreen() {
         <StatTile label="Mastery" value={`${mastery}%`} icon="analytics" tone={tone.accent} />
         <StatTile label="Confidence" value={`${confidence}%`} icon="pulse" tone={colors.info} />
         <StatTile label="Attempts" value={`${topic.attempt_count}`} icon="repeat" tone={colors.violet[600]} />
+        <StatTile label="Evidence" value={`${evidence}%`} icon="documents" tone={colors.success} />
       </View>
 
       <AnimatedCard style={styles.routeCard} elevated>
@@ -254,7 +286,7 @@ export default function AgenticTopicScreen() {
           />
           <RouteStep
             index={3}
-            title="Exam transfer"
+            title={showExamMetrics ? 'Exam transfer' : 'Check yourself'}
             caption={practiceCount ? `${practiceCount} prompts ready for a quick check.` : 'Use the recap to create a fast self-check.'}
             icon="barbell"
             tone={colors.violet[600]}
@@ -280,6 +312,20 @@ export default function AgenticTopicScreen() {
             ))}
           </View>
         ) : null}
+        {topic.lesson_figure ? (
+          <View style={styles.figureWrap}>
+            <Image
+              source={{ uri: buildAssetUrl(topic.lesson_figure.asset_url) }}
+              style={styles.figure}
+              resizeMode="contain"
+              accessible
+              accessibilityLabel={topic.lesson_figure.alt_text ?? `Figure for ${topic.topic_name}`}
+            />
+            {topic.lesson_figure.caption_text ? (
+              <Text style={styles.figureCaption}>{topic.lesson_figure.caption_text}</Text>
+            ) : null}
+          </View>
+        ) : null}
         {topic.text_diagram ? (
           <View style={styles.whiteboard}>
             <View style={styles.whiteboardTop}>
@@ -300,7 +346,7 @@ export default function AgenticTopicScreen() {
           <View style={styles.practiceHeader}>
             <View>
               <Text style={styles.practiceKicker}>Practice burst</Text>
-              <Text style={styles.practiceTitle}>Prove it under exam language</Text>
+              <Text style={styles.practiceTitle}>{showExamMetrics ? 'Prove it under exam language' : 'Prove you can apply it'}</Text>
             </View>
             <View style={styles.practiceBadge}>
               <Text style={styles.practiceBadgeText}>{practiceCount}</Text>
@@ -309,6 +355,43 @@ export default function AgenticTopicScreen() {
           {topic.practice_questions.slice(0, 4).map((prompt, index) => (
             <PracticePrompt key={`practice-${index}`} prompt={prompt} index={index} />
           ))}
+        </AnimatedCard>
+      ) : null}
+
+      {(topic.related_topics ?? []).length > 0 ? (
+        <AnimatedCard style={styles.relatedCard}>
+          <View style={styles.sectionHeaderRow}>
+            <View style={[styles.sectionIcon, { backgroundColor: colors.infoSurface }]}>
+              <Ionicons name="git-network" size={17} color={colors.info} />
+            </View>
+            <View style={styles.sectionHeaderCopy}>
+              <Text style={styles.sectionTitle}>Connected concepts</Text>
+              <Text style={styles.sectionSubtitle}>How this topic links to the rest of your map.</Text>
+            </View>
+          </View>
+          {(topic.related_topics ?? []).map((related) => {
+            const relationLabel = related.label?.trim() || related.relation_kind.replace(/_/g, ' ')
+            const relatedTone = masteryToneColor(related.student_mastery)
+            return (
+              <Pressable
+                key={related.topic_id}
+                onPress={() => navigation.push('AgenticTopic', { topicId: related.topic_id })}
+                accessibilityRole="button"
+                accessibilityLabel={`${related.topic_name}, ${relationLabel}, ${Math.round(related.student_mastery)} percent mastery`}
+                style={({ pressed }) => [styles.relatedRow, pressed && styles.relatedRowPressed]}
+              >
+                <View style={[styles.relatedDot, { backgroundColor: relatedTone }]} />
+                <View style={styles.relatedCopy}>
+                  <Text style={styles.relatedName} numberOfLines={2}>
+                    {related.topic_name}
+                  </Text>
+                  <Text style={styles.relatedRelation}>{relationLabel}</Text>
+                </View>
+                <Text style={[styles.relatedMastery, { color: relatedTone }]}>{Math.round(related.student_mastery)}%</Text>
+                <Ionicons name="chevron-forward" size={16} color={colors.textSoft} />
+              </Pressable>
+            )
+          })}
         </AnimatedCard>
       ) : null}
 
@@ -354,6 +437,65 @@ const styles = StyleSheet.create({
   loadingText: {
     ...typography.roles.body,
     color: colors.textMuted,
+  },
+  figureWrap: {
+    gap: spacing[2],
+    borderRadius: radius.lg,
+    backgroundColor: colors.backgroundMuted,
+    padding: spacing[3],
+  },
+  figure: {
+    width: '100%',
+    height: 190,
+    borderRadius: radius.sm,
+    backgroundColor: colors.white,
+  },
+  figureCaption: {
+    color: colors.textMuted,
+    fontFamily: typography.fonts.bodyMedium,
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  relatedCard: {
+    gap: spacing[3],
+  },
+  relatedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    minHeight: 56,
+    borderRadius: radius.md,
+    backgroundColor: colors.backgroundMuted,
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2],
+  },
+  relatedRowPressed: {
+    opacity: 0.78,
+  },
+  relatedDot: {
+    width: 8,
+    height: 8,
+    borderRadius: radius.full,
+  },
+  relatedCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  relatedName: {
+    color: colors.text,
+    fontFamily: typography.fonts.headingSemibold,
+    fontSize: 14,
+    lineHeight: 19,
+  },
+  relatedRelation: {
+    color: colors.textMuted,
+    fontFamily: typography.fonts.bodyMedium,
+    fontSize: 11,
+    textTransform: 'capitalize',
+  },
+  relatedMastery: {
+    fontFamily: typography.fonts.bodyBold,
+    fontSize: 13,
   },
   heroCard: {
     borderRadius: radius['2xl'],
@@ -458,10 +600,12 @@ const styles = StyleSheet.create({
   },
   statGrid: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: spacing[2],
   },
   statTile: {
-    flex: 1,
+    flexGrow: 1,
+    flexBasis: '46%',
     minHeight: 96,
     borderRadius: radius.xl,
     backgroundColor: colors.card,

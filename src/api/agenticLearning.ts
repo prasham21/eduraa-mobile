@@ -43,10 +43,29 @@ export interface AgenticLearningSubtopicCard {
   read_time_minutes?: number | null
 }
 
+export interface AgenticLearningLessonFigure {
+  figure_id: string
+  asset_url: string
+  caption_text?: string | null
+  alt_text?: string | null
+  figure_type?: string | null
+  page_number?: number | null
+}
+
+export interface AgenticLearningRelatedTopic {
+  topic_id: string
+  topic_name: string
+  relation_kind: string
+  label?: string | null
+  /** 0-100. */
+  student_mastery: number
+}
+
 export interface AgenticLearningTopicDetail {
   topic_id: string
   subject_id: string
   subject_name: string
+  resolution_subject_id?: string | null
   subject_family: string
   curriculum_mode: string
   curriculum_label: string
@@ -66,6 +85,7 @@ export interface AgenticLearningTopicDetail {
   recap_points: string[]
   diagram_kind?: string | null
   text_diagram?: string | null
+  lesson_figure?: AgenticLearningLessonFigure | null
   practice_questions: string[]
   coach_note?: string | null
   resolved_at?: string | null
@@ -76,6 +96,14 @@ export interface AgenticLearningTopicDetail {
   paper_types?: string[] | null
   branch?: string | null
   weightage_label?: string | null
+  related_topics?: AgenticLearningRelatedTopic[]
+}
+
+export interface AgenticLearningSubtopicList {
+  subject_id: string
+  subject_name: string
+  subject_family: string
+  items: AgenticLearningSubtopicCard[]
 }
 
 export const agenticLearningApi = {
@@ -90,8 +118,8 @@ export const agenticLearningApi = {
   },
 
   async getSubtopics(subjectId: string) {
-    const response = await apiClient.get<{ items: AgenticLearningSubtopicCard[] }>(`/agentic-learning/subjects/${subjectId}/subtopics`)
-    return response.data.items
+    const response = await apiClient.get<AgenticLearningSubtopicList>(`/agentic-learning/subjects/${subjectId}/subtopics`)
+    return response.data
   },
 
   async getTopic(topicId: string) {

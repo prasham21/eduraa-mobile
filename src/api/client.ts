@@ -42,6 +42,18 @@ const resolveApiBaseUrl = () => {
   return `http://localhost:${LOCAL_API_PORT}`
 }
 
+/**
+ * Resolve an asset path returned by the API. Mirrors the web client's
+ * buildApiUrl: already-absolute URLs (blob storage, CDN) pass through
+ * untouched, relative paths get the API origin prefixed.
+ */
+export function buildAssetUrl(path?: string | null): string | undefined {
+  const value = path?.trim()
+  if (!value) return undefined
+  if (/^https?:\/\//i.test(value)) return value
+  return `${API_BASE_URL}${value.startsWith('/') ? '' : '/'}${value}`
+}
+
 export const API_TARGET = normalizeApiTarget(process.env.EXPO_PUBLIC_API_TARGET)
 export const API_BASE_URL = resolveApiBaseUrl()
 export const TOKEN_KEY = 'eduraa_access_token'
@@ -50,6 +62,21 @@ var inMemoryAccessToken: string | null = null
 
 export function setAccessToken(token: string | null) {
   inMemoryAccessToken = token
+}
+
+/**
+ * The bearer token, using the same precedence as the axios interceptor.
+ *
+ * SecureStore is unavailable on web, where the token lives only in memory, so
+ * anything issuing requests outside axios (the SSE stream) must consult both.
+ */
+export async function getAccessToken(): Promise<string | null> {
+  if (inMemoryAccessToken) return inMemoryAccessToken
+  try {
+    return await SecureStore.getItemAsync(TOKEN_KEY)
+  } catch {
+    return null
+  }
 }
 
 const sharedClientConfig = {

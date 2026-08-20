@@ -1,8 +1,9 @@
-import React from 'react'
+import React, { useMemo } from 'react'
 import { Pressable, StyleSheet, Text, View } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useNavigation } from '@react-navigation/native'
 import { AppScreen } from '../../components/ui'
+import { useLearnerTrack } from '../../hooks/useLearnerTrack'
 import { useAuthStore } from '../../stores/authStore'
 import { colors, radius, shadows, spacing, typography } from '../../theme'
 
@@ -17,36 +18,59 @@ interface LearningTile {
   destination: LearningDestination
 }
 
-const tiles: LearningTile[] = [
-  {
-    title: 'Agentic Learning',
-    meta: 'B2B + B2C students',
-    body: 'Open weak concepts, study the lesson, and mark the pattern resolved.',
-    icon: 'sparkles',
-    color: colors.accent,
-    destination: 'AgenticLearning',
-  },
-  {
-    title: 'JEE resources',
-    meta: 'B2C JEE track',
-    body: 'Open chapter maps, revision PDFs, and formula resources.',
-    icon: 'book',
-    color: colors.warning,
-    destination: 'CompetitiveExam',
-  },
-  {
-    title: 'JEE previous papers',
-    meta: 'B2C JEE track',
-    body: 'Browse structured PYQs, review solutions, and start timed paper practice.',
-    icon: 'library',
-    color: colors.paperStudio.jee,
-    destination: 'PreviousPapers',
-  },
-]
-
 export default function LearningHomeScreen() {
   const navigation = useNavigation<any>()
   const role = useAuthStore((state) => state.user?.role)
+  const { isJee, isCompetitive, curriculum } = useLearnerTrack()
+
+  // Competitive destinations belong to B2C competitive learners only, matching
+  // the web catalog. A B2B school learner never sees JEE surfaces or copy.
+  const showCompetitive = role === 'b2c_student' && isCompetitive
+  const showPreviousPapers = showCompetitive && isJee
+
+  const tiles = useMemo(() => {
+    const list: LearningTile[] = [
+      {
+        title: 'Agentic Learning',
+        meta: curriculum.label ?? 'Your curriculum',
+        body: 'Open weak concepts, study the lesson, and mark the pattern resolved.',
+        icon: 'sparkles',
+        color: colors.accent,
+        destination: 'AgenticLearning',
+      },
+    ]
+
+    if (showCompetitive) {
+      list.push({
+        title: isJee ? 'JEE resources' : 'Exam resources',
+        meta: 'Competitive track',
+        body: 'Open chapter maps, revision PDFs, and formula resources.',
+        icon: 'book',
+        color: colors.warning,
+        destination: 'CompetitiveExam',
+      })
+    }
+
+    if (showPreviousPapers) {
+      list.push({
+        title: 'JEE previous papers',
+        meta: 'JEE track',
+        body: 'Browse structured PYQs, review solutions, and start timed paper practice.',
+        icon: 'library',
+        color: colors.paperStudio.jee,
+        destination: 'PreviousPapers',
+      })
+    }
+
+    return list
+  }, [curriculum.label, isJee, showCompetitive, showPreviousPapers])
+
+  const heading = showCompetitive ? (isJee ? 'JEE workspace' : 'Exam workspace') : 'Your learning'
+  const body = showCompetitive
+    ? 'Agentic lessons, exam resources, and previous-year practice in one place.'
+    : curriculum.label
+      ? `Concept lessons built from your own attempts across ${curriculum.label}.`
+      : 'Concept lessons built from your own attempts and checked work.'
 
   return (
     <AppScreen contentStyle={styles.screen}>
@@ -56,9 +80,9 @@ export default function LearningHomeScreen() {
         </View>
         <View style={styles.introCopy}>
           <Text style={styles.introKicker}>Learning</Text>
-          <Text style={styles.introTitle}>{role === 'b2c_student' ? 'JEE workspace' : 'Student workspace'}</Text>
+          <Text style={styles.introTitle}>{heading}</Text>
           <Text style={styles.introBody} numberOfLines={2}>
-            Agentic lessons, JEE resources, and previous-year practice in one place.
+            {body}
           </Text>
         </View>
       </View>
@@ -68,7 +92,9 @@ export default function LearningHomeScreen() {
           <Pressable
             key={tile.title}
             onPress={() => navigation.navigate(tile.destination)}
-            style={({ pressed }) => [styles.tile, pressed && styles.tilePressed]}
+            accessibilityRole="button"
+            accessibilityLabel={`${tile.title}. ${tile.body}`}
+            style={({ pressed }) => [styles.tile, tiles.length === 1 && styles.tileWide, pressed && styles.tilePressed]}
           >
             <View style={styles.tileTop}>
               <View style={[styles.iconWrap, { backgroundColor: `${tile.color}14` }]}>
@@ -76,7 +102,7 @@ export default function LearningHomeScreen() {
               </View>
               <Ionicons name="chevron-forward" size={18} color={colors.textSoft} />
             </View>
-            <Text style={styles.tileMeta}>{tile.meta}</Text>
+            <Text style={styles.tileMeta} numberOfLines={1}>{tile.meta}</Text>
             <Text style={styles.tileTitle}>{tile.title}</Text>
             <Text style={styles.tileBody}>{tile.body}</Text>
           </Pressable>
@@ -149,6 +175,10 @@ const styles = StyleSheet.create({
     padding: spacing[3],
     justifyContent: 'space-between',
     ...shadows.xs,
+  },
+  tileWide: {
+    width: '100%',
+    minHeight: 124,
   },
   tilePressed: {
     opacity: 0.78,
